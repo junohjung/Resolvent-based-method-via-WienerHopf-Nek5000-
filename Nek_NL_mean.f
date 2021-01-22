@@ -1,0 +1,401 @@
+c--------------------------------------------------------------------
+c           Modules
+
+      include 'Shapes.f'            ! Defines domain "Shapes", used as support for sensors and actuators
+      include 'SavePerturbations.f' ! Module for saving perturbations to disk
+
+
+
+c-----------------------------------------------------------------------
+      subroutine uservp (ix,iy,iz,eg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      integer e,f,eg
+c     e = gllel(eg)
+
+      udiff =0.
+      utrans=0.
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userf  (ix,iy,iz,eg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+      real tmp_rand(2)
+      real f_amp 
+      logical,save :: firstCall = .true.
+      INTEGER, DIMENSION(:), ALLOCATABLE :: seed
+      COMMON /ResMode/ currIter,sensRange,actRange
+      common /nekmpi/ nidd,npp,nekcomm,nekgroup,nekreal
+      integer ix,iy,iz, eg,e,ijke ,ntot , nloc,n
+      real tmp
+      e = gllel(eg)
+
+
+      f_amp = 1e-4
+      if (firstCall) then
+        CALL RANDOM_SEED(size = n)
+        ALLOCATE(seed(n))
+        seed=nidd
+        CALL RANDOM_SEED(PUT = seed)
+c        call random_init(.true., .true.)
+        DEALLOCATE(seed)
+        firstCall=.false.
+      endif
+
+      tmp = bm1(ix,iy,iz,e)
+      call random_number(tmp_rand)
+      ffx= 2*(tmp_rand(1)-0.5)*3/sqrt(dt*bm1(ix,iy,iz,e))*f_amp
+c         ffx= sqrt(-2*log(tmp_rand(1)))*cos(2*pi*tmp_rand(2))/sqrt(dt)
+      call random_number(tmp_rand)
+c         ffy= sqrt(-2*log(tmp_rand(1)))*cos(2*pi*tmp_rand(2))/sqrt(dt)
+      ffy= 2*(tmp_rand(1)-0.5)*3/sqrt(dt*bm1(ix,iy,iz,e))*f_amp
+c      call random_number(tmp_rand)
+c         ffz= sqrt(-2*log(tmp_rand(1)))*cos(2*pi*tmp_rand(2))/sqrt(dt)
+c      ffz= 2*(tmp_rand(1)-0.5)*3/sqrt(dt*bm1(ix,iy,iz,e))*f_amp
+c      ffx=0
+c      ffy=0
+      ffz=0
+      if (x>-5  ) then
+           !Filters external forces for x > -5, as Pff(x,x') = h(x-5)delta(x-x') is assumed.
+         ffx = 0 
+         ffy = 0 
+         ffz = 0 
+      endif
+
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userq  (ix,iy,iz,eg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      integer e,f,eg
+c     e = gllel(eg)
+
+      qvol   = 0.0
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userchk
+c      use FLD2Force
+c      use Control
+      use Shapes
+
+      implicit none
+      include 'SIZE'
+      include 'TSTEP'           ! ISTEP
+      include 'INPUT'           ! PARAM
+      include 'SOLN'            ! V[XYZ]
+      include 'GEOM'            ! xm1,ym1
+      include 'ADJOINT'
+      include 'MASS'
+
+      integer e,eg, ntot1
+      integer ntot,i,j,ishape
+c      integer nShapes   
+      character(len=100) fileName
+      real,external::glsum      
+      real pertNorm(lpert) , maxnorm 
+      real readings(30)
+c      real dudt
+      real xx,yy,sx,sy,sz      
+      real baseFlow_readings(30)
+      real,save :: ubase(lx1,ly1,lz1,lelv)
+      real,save :: vbase(lx1,ly1,lz1,lelv)
+      real,save :: ProjectOnShapesD(15)
+      real,save :: absTol = 0
+      real,save ::  relativeTol = 1e-4
+      real , save :: exitTime = 1e99
+      logical, save :: runCompleted = .false. 
+      logical, save :: firstSave = .true. 
+      logical , save :: firstCall = .true.
+      integer currIter,sensRange(2),actRange(2) 
+      COMMON /ResMode/ currIter,sensRange,actRange
+      ntot = lx1*ly1*lz1*lelv
+
+      ! Save Mass Matrix for posprocessing
+      ! Mass matrix can be usefull for some posprocessing. It is not nedded for 
+      ! control, but can be helpful to compute perturbation norms, etc 
+      if (NIO==0) write(*,*) "Saving Mass Matrix on istep==0"
+      if (istep==0) then
+            call exportShapes()
+            ifxyo = .true.
+            call outpost2(bm1,bm1,
+     $                    bm1,bm2,
+     $                    bm1,0,'bm1')
+            if (currIter==-3) call exitt
+
+      endif
+
+      ! compute DNS perturbation
+
+      
+c      if (istep==0) then
+c          do i=1,ntot
+c     	      ubase(i,1,1,1) = vx(i,1,1,1)
+c	      vbase(i,1,1,1) = vy(i,1,1,1)
+c          enddo
+c      endif
+
+      do ishape = 1,15
+      	 ProjectOnshapesD(ishape) = 0
+      enddo	 
+      
+
+      if (npert ==0 ) then
+        !routine for reading non-linear run sensors
+       do i = 1,ntot
+         do ishape = 1,15
+           call getShape(ishape,xm1(i,1,1,1),ym1(i,1,1,1),
+     $                          zm1(i,1,1,1),sx,sy,sz)
+           ProjectOnShapesD(ishape) = ProjectOnShapesD(ishape)  +
+     $           (vx(i,1,1,1)*sx +
+     $           vy(i,1,1,1)*sy )*bm1(i,1,1,1)
+           if (ndim>2) ProjectOnShapesD(ishape) = 
+     $         ProjectOnShapesD(ishape)+vz(i,1,1,1)*sz*bm1(i,1,1,1)
+         enddo
+       enddo
+      else
+       !routine for reading linearized run sensors
+       do i = 1,ntot
+          do ishape = 1,15
+           call getShape(ishape,xm1(i,1,1,1),ym1(i,1,1,1),
+     $                         zm1(i,1,1,1),sx,sy,sz)
+           ProjectOnShapesD(ishape) = ProjectOnShapesD(ishape)  +
+     $       (vxp(i,1)*sx + vyp(i,1)*sy )*bm1(i,1,1,1)
+           if (ndim>2) ProjectOnShapesD(ishape) = 
+     $        ProjectOnShapesD(ishape)+Vzp(i,1)*sz*bm1(i,1,1,1)
+          enddo
+       enddo
+      endif
+
+      do ishape = 1,15
+         ProjectOnShapesD(ishape) = glsum(ProjectOnShapesD(ishape),1)
+      enddo
+
+      
+      
+      if (NIO==0 ) then
+          write(fileName,'(A,I0.2,A)') 'ProjShapes_',i,'.dat'
+          if (firstCall ) then
+            open(unit=88, file=fileName,
+     $        status="replace", action="write")
+            write(88,'(A)', advance="no") 'time' 
+            do j = 1,15
+              write(88,'(A,I0.2)',advance="no") '   ProjOnShape_' , i
+            enddo ! header loop
+            write(88,*) ' ' 
+          else
+            open(unit=88, file=fileName,
+     $       status='old',action='write',position="append")
+          endif !firs tcall
+          write(88,*) time , ProjectOnShapesD(1:15)
+          close(88)       
+      endif  ! NIO 
+      firstCall = .false.
+
+      call avg_all()
+      
+
+c      readings=ProjectOnShapes(0)
+c      if (istep==0) baseFlow_readings = ProjectOnShapes(0)
+c      if (NIO==0) write(*,*) 'Current Readings ',
+c     $       time,readings(sensRange(1):sensRange(2))
+c     $	     - baseFlow_readings(sensRange(1):sensRange(2))
+     
+c       call ControlUpdateReadings(
+c    $	     time,readings(sensRange(1):sensRange(2))
+c    $	     - baseFlow_readings(sensRange(1):sensRange(2)))
+
+
+c      ntot1 = NX1*NY1*NZ1*NELV
+c     calculate L2 norms
+c      do i=1,ntot1
+c         dudt = dudt + (VX(i,1,1,1) - VXlag(i,1,1,1,1))**2
+c         dudt = dudt + (VY(i,1,1,1) - VYlag(i,1,1,1,1))**2
+c      enddo
+c      
+c      dudt=glsum(dudt,1)
+c      if (dudt<1e-10) then
+c           if (NIO==0) write(*,*) 'Basestate found!'
+c            call outpost(vx,vy,vz,pr,t,'bf_')
+c            call exitt
+c      endif
+c      if (NIO==0) write(*,*) '|DU_Dt|2 = ',dudt 
+
+      ! Save current sensor readings (used latter to obtain control laws).
+c      call SaveProjUp2Shapes(1,1)
+
+
+
+c      if (NIO==0) write(*,*) 'Computing run Norm...'
+c       	 maxnorm = 0
+c       if (npert == 1) then
+c       	  do j=1,npert
+c            pertNorm(j) = 0
+c            do i=1,ntot 
+c              pertNorm(j) = pertNorm(j) + 
+c     c        ( vxp(i,j)**2 + vyp(i,j)**2 )*bm1(i,1,1,1)
+c            enddo
+c            pertNorm(j) = glsum(pertNorm(j),1)
+c            pertNorm(j) = sqrt(pertNorm(j))
+c            
+c            maxnorm = max(maxnorm,pertNorm(j))  
+c      	  end do
+c       else
+c       	  do j=1,1
+c            pertNorm(j) = 0
+c            do i=1,ntot 
+c              pertNorm(j) = pertNorm(j) + 
+c     c        ((vx(i,1,1,1)-ubase(i,1,1,1))**2   +
+c     c	      (vy(i,1,1,1)-vbase(i,1,1,1))**2 )*bm1(i,1,1,1)
+c            enddo
+c            pertNorm(j) = glsum(pertNorm(j),1)
+c            pertNorm(j) = sqrt(pertNorm(j))
+c            
+c            maxnorm = max(maxnorm,pertNorm(j))  
+c      	  end do
+c       endif
+
+
+
+
+      ! sets run tolerance: run stops when the current norm is 10^-5 (relative norm) of the maximum norm.
+      absTol = max(absTol,maxnorm*relativeTol)  
+      if (NIO==0) write(*,*) 'AbsTol : ', absTol,
+     $   ' rel', relativeTol  ,' pertNorm ', maxnorm
+      
+      ! Writes current perturbation norm to file
+      if (NIO==0) then
+        if (istep == 0) then
+          open (unit=98, file='runNorm.txt',
+     $            status='replace',action='write')
+        else
+          open (unit=98, file='runNorm.txt',
+     $        position="append" ,status='old',action='write')
+        endif
+        write(98,*) time , maxnorm , exitTime, absTol !,runCompleted
+        close(98)
+      endif
+
+      if (NIO==0) write(*,*) 'Save Flow...'
+      if ( maxnorm > absTol ) then
+        ifxyo = firstSave
+	call SavePerturbations('D') ! Dns run
+        firstSave = .false.
+      endif
+
+
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userbc (ix,iy,iz,iside,eg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+      integer e,eg
+
+c      ux=0.0
+c      uy=0.0
+c      uz=0.0
+
+      ux = y*(1.0-y)*4.0
+      uy = 0.0
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine useric (ix,iy,iz,eg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+      integer e,eg
+
+      ux = 0.0
+      uy = 0.0
+c      uz = 0.0
+      
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine usrdat
+      use Shapes
+      include 'SIZE'
+      include 'TOTAL'
+      integer :: a
+      character(len=100) fileAdd1 
+c      integer nio
+      integer currIter,sensRange(2),actRange(2)
+      COMMON /ResMode/ currIter,sensRange,actRange
+
+      ! Reads the run type, as well as sensor and actuator ranges 
+      ! i.e. range 1-3 indicates that shapes 1,2 and 3 are used.  
+      open (unit=98, file='currRun.txt',
+     $                status='old',action='read')
+      read(98,*) currIter
+      close(98)
+      open (unit=98, file='sensRange.txt',
+     $                status='old',action='read')
+      read(98,*) sensRange
+      close(98)
+      open (unit=98, file='actRange.txt',
+     $                status='old',action='read')
+      read(98,*) actRange
+      close(98)      
+      
+      ! Initi "Shapes" module. 'Shapes.txt' provides a parametric list of shapes.
+      fileAdd1='shapes.txt'
+      call ReadShapesFile(fileAdd1)
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine usrdat2
+      include 'SIZE'
+      include 'TOTAL'
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine usrdat3
+      include 'SIZE'
+      include 'TOTAL'
+c      include 'MASS'
+      integer currIter,sensRange(2),actRange(2)
+      COMMON /ResMode/ currIter,sensRange,actRange
+c
+      !Save Undeformed Mass Matrix (before loading external fld) for posprocessing.
+      if (istep==0) then
+            ifxyo = .true.
+            call outpost2(bm1,bm1,
+     $                    bm1,bm2,
+     $                    bm1,0,'bm0')
+      endif
+      if (currIter==-3) call exitt
+
+      return
+      end
+c-----------------------------------------------------------------------
+
+c automatically added by makenek
+      subroutine usrsetvert(glo_num,nel,nx,ny,nz) ! to modify glo_num
+      integer*8 glo_num(1)
+
+      return
+      end
+
+c automatically added by makenek
+      subroutine userqtl
+
+      call userqtl_scig
+
+      return
+      end

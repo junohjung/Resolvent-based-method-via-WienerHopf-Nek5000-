@@ -1,0 +1,57 @@
+#!/bin/bash
+if [ $# -eq 0 ]; then
+      echo 'Syntax firstShape lastShape runtype(1-5) reafile nproc'
+      echo 'runType==1 : sensor/target run (adj+dir) '
+      echo 'runType==2 : actuator run (dir) '
+      echo 'runType==3 : random run  '
+      echo 'runType==4 : control run  '
+      echo 'runType==5 : uncontrol nonlinear run  '
+      exit
+fi
+if [ $3 == 1 ] ; then
+      typestr="sens";
+fi
+if [ $3 == 2 ] ; then
+      typestr="act";
+fi
+if [ $3 == 3 ] ; then
+      typestr="rnd";
+fi
+if [ $3 == 4 ] ; then
+      typestr="con";
+fi
+if [ $3 == 5 ] ; then
+      typestr="uncon";
+fi
+echo "Run type: $3 $typestr "
+
+for i in $(seq $1 $2 ); do
+  folder=${typestr}$i
+  mkdir $folder
+  cp bf_* nek5000 actRange.txt sensRange.txt run shapes.txt $4.{rea,map} $folder
+  cd $folder
+#  qsub -N BFS_Re500_${3:0:1}$i -l select=1:ncpus=8  "./subrun $4 $5"
+
+  if [ $3 == 1 ] ; then
+    echo "$i $i" > sensRange.txt
+    ./run $4 $5 0 1
+    ./run $4 $5 1 1
+  fi
+  if [ $3 == 2 ] ; then
+     echo "$i $i" > sensRange.txt
+    ./run $4 $5 2 1
+  fi
+  if [ $3 == 3 ] ; then
+    ./run $4 $5 3 1
+  fi
+  if [ $3 == 4 ] ; then
+    cp ../ControlLaw* .
+    ./run $4 $5 4 0
+  fi
+  if [ $3 == 5 ] ; then
+    cp ../ControlLaw* .
+    ./run $4 $5 5 0
+  fi
+  cd ..
+done
+

@@ -1,0 +1,60 @@
+#!/bin/bash
+
+if [ $HOME -eq "/home/emartini/" ]; then
+      echo "Running on personal PC... No modules loaded"
+else
+      echo "Running on cluster ... Loading Modules..."      
+      module load Nek5000
+      module load MATLAB
+fi
+
+reaFile=$1
+nproc=$2
+irun=$3
+npert=$4
+
+rm  runCompleted 
+# Set up run
+	
+	if [ $irun == 1 ]; then
+	      rm ForceFLDLists.txt
+            for i in $(seq -f "%02.0f" 1 $npert ); do
+	            echo "Setting up previous run as external force..."
+                  ls a${i}${reaFile}0.f????? | sort | tac >ForceFLDLists.txt
+      #	      ./genFLDList
+            done
+      fi
+      
+	echo 'Running Nek5000 ' 
+	# Running Iteration
+	if [ $irun == 0 ]; then
+            echo 0 > currRun.txt
+      	nekmpi $reaFile $nproc > log
+	      rename "s/\.dat/_adj\.dat/" ProjShapes_??.dat
+      elif [ $irun == 1 ]; then
+            echo 1 > currRun.txt
+      	nekmpi $reaFile $nproc > log
+	      rename "s/\.dat/_dir\.dat/" ProjShapes_??.dat
+      elif [ $irun == 2 ]; then
+            echo 2 > currRun.txt
+      	nekmpi $reaFile $nproc > log
+	      rename "s/\.dat/_act\.dat/" ProjShapes_??.dat
+      elif [ $irun == 3 ]; then
+            echo 3 > currRun.txt
+      	nekmpi $reaFile $nproc > log
+	      rename "s/\.dat/_rnd\.dat/" ProjShapes_??.dat
+      elif [ $irun == 4 ]; then
+            echo 4 > currRun.txt
+      	nekmpi $reaFile $nproc > log
+	      rename "s/\.dat/_con\.dat/" ProjShapes_??.dat
+      elif [ $irun == 5 ]; then
+            echo 4 > currRun.txt
+      	nekmpi $reaFile $nproc > log
+	      rename "s/\.dat/_uncon\.dat/" ProjShapes_??.dat
+      fi
+      
+done
+
+	
+	
+
